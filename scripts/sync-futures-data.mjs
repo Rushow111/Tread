@@ -1,4 +1,5 @@
-// Dataset is generated only from declared source metadata; no synthetic prices.\nimport { mkdir, readFile, writeFile } from "node:fs/promises";
+// Dataset is generated only from declared source metadata; no synthetic prices.
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
