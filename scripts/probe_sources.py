@@ -20,6 +20,16 @@ ATTEMPTS = 1
 
 PROBES = [
     {
+        "exchange": "DCE_SINA",
+        "name": "新浪财经大商所主连代理",
+        "url": "https://stock2.finance.sina.com.cn/futures/api/jsonp.php/var_M0=/InnerFuturesNewService.getDailyKLine?symbol=M0",
+    },
+    {
+        "exchange": "CFFEX_SINA",
+        "name": "新浪财经中金所主连代理",
+        "url": "https://stock2.finance.sina.com.cn/futures/api/jsonp.php/var_IF0=/InnerFuturesNewService.getDailyKLine?symbol=IF0",
+    },
+    {
         "exchange": "SHFE",
         "name": "上海期货交易所日行情",
         "url": "https://www.shfe.com.cn/data/tradedata/future/dailydata/kx20260831.dat",
