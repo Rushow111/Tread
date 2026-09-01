@@ -15,8 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 USER_AGENT = "Mozilla/5.0 (compatible; TreadOfficialDataProbe/1.0; +https://github.com/Rushow111/Tread)"
-TIMEOUT = 45
-ATTEMPTS = 3
+TIMEOUT = 15
+ATTEMPTS = 1
 
 PROBES = [
     {
