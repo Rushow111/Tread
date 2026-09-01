@@ -1,0 +1,62 @@
+name: Build futures history dataset
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "40 9 * * 1-5"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/build-futures-data.yml"
+      - "scripts/sync-futures-data.mjs"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: futures-history-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Download and aggregate market history
+        run: node scripts/sync-futures-data.mjs
+
+      - name: Validate generated dataset
+        run: |
+          node - <<'NODE'
+          const fs = require("node:fs");
+          const data = JSON.parse(fs.readFileSync("public/data/futures.json", "utf8"));
+          if (!Array.isArray(data.assets) || data.assets.length < 50) {
+            throw new Error(`Expected at least 50 assets, got ${data.assets?.length}`);
+          }
+          for (const asset of data.assets) {
+            if (!asset.series?.length) throw new Error(`${asset.id}: empty series`);
+            for (const [date, low, high] of asset.series) {
+              if (!date || !Number.isFinite(low) || !Number.isFinite(high) || low > high) {
+                throw new Error(`${asset.id}: invalid point ${date}`);
+              }
+            }
+          }
+          console.log(`Validated ${data.assets.length} assets and ${data.assets.reduce((n, a) => n + a.series.length, 0)} points`);
+          NODE
+
+      - name: Commit refreshed data
+        run: |
+          git config user.name "tread-data-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add public/data/futures.json
+          git diff --cached --quiet && exit 0
+          git commit -m "data: refresh futures history"
+          git push
