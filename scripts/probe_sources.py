@@ -10,6 +10,7 @@ import ssl
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -120,7 +121,8 @@ def fetch(probe: dict) -> dict:
 
 
 def main() -> int:
-    results = [fetch(probe) for probe in PROBES]
+    with ThreadPoolExecutor(max_workers=len(PROBES)) as executor:
+        results = list(executor.map(fetch, PROBES))
     report = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "runner": os.environ.get("RUNNER_NAME"),
