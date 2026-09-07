@@ -407,8 +407,9 @@ async function updateStocks(seed, previous) {
     if (Array.isArray(row) && row.length >= 7 && rows.has(row[0])) rows.set(row[0], row);
   }
 
-  const batches = chunks([...rows.values()], 75);
-  const results = await mapConcurrent(batches, 3, async (batch) => {
+  // Yahoo Spark accepts at most 20 symbols per request.
+  const batches = chunks([...rows.values()], 20);
+  const results = await mapConcurrent(batches, 4, async (batch) => {
     const symbols = batch.map((row) => row[1]);
     const query = new URLSearchParams({ symbols: symbols.join(","), range: "5d", interval: "1d" });
     let body;
@@ -447,7 +448,10 @@ async function updateStocks(seed, previous) {
   });
 
   const successfulBatches = results.filter((result) => typeof result === "number").length;
-  if (successfulBatches === 0) throw new Error("Every Yahoo stock batch failed");
+  if (successfulBatches === 0) {
+    const examples = results.filter((result) => result?.error).slice(0, 3).map((result) => result.error);
+    throw new Error(`Every Yahoo stock batch failed: ${examples.join("; ")}`);
+  }
   const stocks = [...rows.values()].sort((left, right) => left[0].localeCompare(right[0]));
   const asOf = stocks.map((row) => row[2]).sort().at(-1) ?? baselineAsOf;
   return {
