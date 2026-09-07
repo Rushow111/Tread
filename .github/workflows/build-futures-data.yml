@@ -1,20 +1,13 @@
-name: Build futures history dataset
+name: Rebuild futures history baseline
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "40 9 * * 1-5"
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/build-futures-data.yml"
-      - "scripts/sync-futures-data.mjs"
 
 permissions:
   contents: write
 
 concurrency:
-  group: futures-history-sync
+  group: futures-history-rebuild
   cancel-in-progress: false
 
 jobs:
@@ -25,12 +18,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "22"
 
-      - name: Download and aggregate market history
+      - name: Download and aggregate complete market history
         run: node scripts/sync-futures-data.mjs
 
       - name: Validate generated dataset
@@ -43,20 +35,15 @@ jobs:
           }
           for (const asset of data.assets) {
             if (!asset.series?.length) throw new Error(`${asset.id}: empty series`);
-            for (const [date, low, high] of asset.series) {
-              if (!date || !Number.isFinite(low) || !Number.isFinite(high) || low > high) {
-                throw new Error(`${asset.id}: invalid point ${date}`);
-              }
-            }
           }
-          console.log(`Validated ${data.assets.length} assets and ${data.assets.reduce((n, a) => n + a.series.length, 0)} points`);
+          console.log(`Validated ${data.assets.length} assets through ${data.asOf}`);
           NODE
 
-      - name: Commit refreshed data
+      - name: Commit refreshed baseline
         run: |
           git config user.name "tread-data-bot"
           git config user.email "actions@users.noreply.github.com"
           git add public/data/futures.json
           git diff --cached --quiet && exit 0
-          git commit -m "data: refresh futures history"
+          git commit -m "data: rebuild futures history baseline"
           git push

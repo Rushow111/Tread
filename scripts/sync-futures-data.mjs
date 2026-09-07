@@ -1,14 +1,15 @@
-// Dataset is generated only from declared source metadata; no synthetic prices.
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const SNAPSHOT_END = "2026-08-31";
+const SNAPSHOT_END =
+  process.env.MARKET_DATA_END ?? new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const OUTPUT = resolve(ROOT, "public/data/futures.json");
 const CACHE_DIR = "/tmp/price-atlas-market-cache";
 const USER_AGENT =
   "Mozilla/5.0 (compatible; PriceAtlas/1.0; +https://global-price-atlas.gc11119242530.chatgpt.site)";
+const FOREIGN_ONLY = process.argv.includes("--foreign-only");
 
 function domestic(exchange, rows) {
   return rows.map(([symbol, name, listedAt, unit = "元/吨", decimals = 0]) => ({
@@ -68,17 +69,47 @@ const foreignInstruments = [
   ["GC=F", "COMEX 黄金", "COMEX", "美元/盎司", 1],
   ["SI=F", "COMEX 白银", "COMEX", "美元/盎司", 3],
   ["HG=F", "COMEX 铜", "COMEX", "美元/磅", 4],
+  ["PL=F", "NYMEX 铂金", "NYMEX", "美元/盎司", 1],
+  ["PA=F", "NYMEX 钯金", "NYMEX", "美元/盎司", 1],
   ["CL=F", "WTI 原油", "NYMEX", "美元/桶", 2],
   ["BZ=F", "布伦特原油", "ICE", "美元/桶", 2],
   ["NG=F", "天然气", "NYMEX", "美元/MMBtu", 3],
+  ["RB=F", "RBOB 汽油", "NYMEX", "美元/加仑", 4],
+  ["HO=F", "超低硫柴油", "NYMEX", "美元/加仑", 4],
   ["ZC=F", "CBOT 玉米", "CBOT", "美分/蒲式耳", 2],
   ["ZW=F", "CBOT 小麦", "CBOT", "美分/蒲式耳", 2],
   ["ZS=F", "CBOT 大豆", "CBOT", "美分/蒲式耳", 2],
+  ["ZM=F", "CBOT 豆粕", "CBOT", "美元/短吨", 1],
+  ["ZL=F", "CBOT 豆油", "CBOT", "美分/磅", 2],
+  ["ZO=F", "CBOT 燕麦", "CBOT", "美分/蒲式耳", 2],
+  ["KE=F", "KCBT 硬红冬小麦", "KCBT", "美分/蒲式耳", 2],
   ["KC=F", "ICE 咖啡", "ICE", "美分/磅", 2],
+  ["CC=F", "ICE 可可", "ICE", "美元/吨", 0],
   ["CT=F", "ICE 棉花", "ICE", "美分/磅", 2],
   ["SB=F", "ICE 原糖", "ICE", "美分/磅", 2],
+  ["OJ=F", "ICE 橙汁", "ICE", "美分/磅", 2],
   ["LE=F", "CME 活牛", "CME", "美分/磅", 3],
+  ["GF=F", "CME 育肥牛", "CME", "美分/磅", 3],
   ["HE=F", "CME 瘦肉猪", "CME", "美分/磅", 3],
+  ["LBS=F", "CME 木材", "CME", "美元/千板英尺", 1],
+  ["ES=F", "E-mini 标普500", "CME", "指数点", 2],
+  ["NQ=F", "E-mini 纳斯达克100", "CME", "指数点", 2],
+  ["YM=F", "E-mini 道琼斯", "CBOT", "指数点", 0],
+  ["RTY=F", "E-mini 罗素2000", "CME", "指数点", 2],
+  ["NKD=F", "日经225（美元）", "CME", "指数点", 0],
+  ["ZB=F", "美国30年期国债", "CBOT", "价格点", 3],
+  ["UB=F", "美国超长期国债", "CBOT", "价格点", 3],
+  ["ZN=F", "美国10年期国债", "CBOT", "价格点", 3],
+  ["ZF=F", "美国5年期国债", "CBOT", "价格点", 3],
+  ["ZT=F", "美国2年期国债", "CBOT", "价格点", 3],
+  ["6E=F", "欧元期货", "CME", "美元/欧元", 5],
+  ["6J=F", "日元期货", "CME", "美元/日元", 6],
+  ["6B=F", "英镑期货", "CME", "美元/英镑", 5],
+  ["6A=F", "澳元期货", "CME", "美元/澳元", 5],
+  ["6C=F", "加元期货", "CME", "美元/加元", 5],
+  ["6S=F", "瑞郎期货", "CME", "美元/瑞郎", 5],
+  ["6N=F", "新西兰元期货", "CME", "美元/新西兰元", 5],
+  ["6M=F", "墨西哥比索期货", "CME", "美元/比索", 6],
 ].map(([symbol, name, exchange, unit, decimals]) => ({
   id: `YF:${symbol}`,
   symbol,
@@ -444,73 +475,85 @@ async function loadGfexBulk() {
   return assets;
 }
 
-const domesticJobs = [
-  loadDomesticExchange(
-    "SHFE",
-    "2002-01-07",
-    parseShfeFamily,
-    (date) =>
-      request(
-        `https://www.shfe.com.cn/data/tradedata/future/dailydata/kx${compactDate(date)}.dat`,
-      ),
-  ),
-  loadDomesticExchange(
-    "INE",
-    "2018-03-26",
-    parseShfeFamily,
-    (date) =>
-      request(
-        `https://www.ine.cn/data/tradedata/future/dailydata/kx${compactDate(date)}.dat`,
-      ),
-  ),
-  loadDomesticExchange(
-    "CZCE",
-    "2010-01-04",
-    parseCzce,
-    (date) => {
-      const compact = compactDate(date);
-      return request(
-        `https://www.czce.com.cn/cn/DFSStaticFiles/Future/${date.slice(0, 4)}/${compact}/FutureDataDaily.txt`,
-      );
-    },
-  ),
-  loadGfexBulk(),
-];
+const foreign = await mapConcurrent(foreignInstruments, 7, loadForeign, "GLOBAL");
+let payload;
 
-const [domesticGroups, foreign] = await Promise.all([
-  Promise.all(domesticJobs),
-  mapConcurrent(foreignInstruments, 7, loadForeign, "GLOBAL"),
-]);
+if (FOREIGN_ONLY) {
+  const existing = JSON.parse(await readFile(OUTPUT, "utf8"));
+  const domesticAssets = existing.assets.filter((asset) => asset.category === "中国期货");
+  payload = {
+    ...existing,
+    generatedAt: new Date().toISOString(),
+    methodologyVersion: "2026-09-02.v1",
+    sources: { ...existing.sources, YAHOO: sources.YAHOO },
+    assets: [...domesticAssets, ...foreign]
+      .filter((asset) => asset && !asset.error && asset.series.length > 0)
+      .sort((a, b) => a.category.localeCompare(b.category) || a.id.localeCompare(b.id)),
+  };
+} else {
+  const domesticJobs = [
+    loadDomesticExchange(
+      "SHFE",
+      "2002-01-07",
+      parseShfeFamily,
+      (date) =>
+        request(
+          `https://www.shfe.com.cn/data/tradedata/future/dailydata/kx${compactDate(date)}.dat`,
+        ),
+    ),
+    loadDomesticExchange(
+      "INE",
+      "2018-03-26",
+      parseShfeFamily,
+      (date) =>
+        request(
+          `https://www.ine.cn/data/tradedata/future/dailydata/kx${compactDate(date)}.dat`,
+        ),
+    ),
+    loadDomesticExchange(
+      "CZCE",
+      "2010-01-04",
+      parseCzce,
+      (date) => {
+        const compact = compactDate(date);
+        return request(
+          `https://www.czce.com.cn/cn/DFSStaticFiles/Future/${date.slice(0, 4)}/${compact}/FutureDataDaily.txt`,
+        );
+      },
+    ),
+    loadGfexBulk(),
+  ];
+  const domesticGroups = await Promise.all(domesticJobs);
+  const assets = [...domesticGroups.flat(), ...foreign]
+    .filter((asset) => asset && !asset.error && asset.series.length > 0)
+    .sort((a, b) => a.category.localeCompare(b.category) || a.id.localeCompare(b.id));
 
-const assets = [...domesticGroups.flat(), ...foreign]
-  .filter((asset) => asset && !asset.error && asset.series.length > 0)
-  .sort((a, b) => a.category.localeCompare(b.category) || a.id.localeCompare(b.id));
-
-const payload = {
-  generatedAt: new Date().toISOString(),
-  asOf: SNAPSHOT_END,
-  methodologyVersion: "2026-09-01.v1",
-  sources,
-  unavailableSources: [
-    {
-      exchange: "DCE",
-      name: "大连商品交易所",
-      url: "https://www.dce.com.cn/dalianshangpin/xqsj/index.html",
-      reason: "官方公开接口当前阻止服务器访问；未使用第三方数据替代",
-    },
-    {
-      exchange: "CFFEX",
-      name: "中国金融期货交易所",
-      url: "https://www.cffex.com.cn/cn/lssjxz.html",
-      reason: "官方历史下载当前无法稳定连接；未使用第三方数据替代",
-    },
-  ],
-  assets,
-};
+  payload = {
+    generatedAt: new Date().toISOString(),
+    asOf: SNAPSHOT_END,
+    methodologyVersion: "2026-09-02.v1",
+    sources,
+    unavailableSources: [
+      {
+        exchange: "DCE",
+        name: "大连商品交易所",
+        url: "https://www.dce.com.cn/dalianshangpin/xqsj/index.html",
+        reason: "官方公开接口当前阻止服务器访问；未使用第三方数据替代",
+      },
+      {
+        exchange: "CFFEX",
+        name: "中国金融期货交易所",
+        url: "https://www.cffex.com.cn/cn/lssjxz.html",
+        reason: "官方历史下载当前无法稳定连接；未使用第三方数据替代",
+      },
+    ],
+    assets,
+  };
+}
 
 await mkdir(dirname(OUTPUT), { recursive: true });
 await writeFile(OUTPUT, `${JSON.stringify(payload)}\n`, "utf8");
 
 console.log(
-  `Wrote ${assets.length} assets / ${assets.reduce((sum, asset) => sum + asset.series.length, 0)} points to ${OUTPUT}`,
+  `Wrote ${payload.assets.length} assets / ${payload.assets.reduce((sum, asset) => sum + asset.series.length, 0)} points to ${OUTPUT}`,
 );

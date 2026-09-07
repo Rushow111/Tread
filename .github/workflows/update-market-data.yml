@@ -1,0 +1,71 @@
+name: Update daily market data
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "35 2 * * *"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/update-market-data.yml"
+      - "scripts/update-daily-market-data.mjs"
+      - "data/futures-registry.json"
+      - "data/us-stock-seed.json.gz"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-market-data
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Validate updater
+        run: node scripts/update-daily-market-data.mjs --self-test
+
+      - name: Download latest completed daily prices
+        run: node scripts/update-daily-market-data.mjs
+
+      - name: Validate daily datasets
+        run: |
+          node - <<'NODE'
+          const fs = require("node:fs");
+          const futures = JSON.parse(fs.readFileSync("public/data/daily-futures.json", "utf8"));
+          const stocks = JSON.parse(fs.readFileSync("public/data/daily-stocks.json", "utf8"));
+          if (futures.status.registryCount !== 217) throw new Error("Futures registry is incomplete");
+          if (!Array.isArray(futures.assets) || futures.assets.length < 80) throw new Error("Too few futures received a daily update");
+          if (!Array.isArray(stocks.stocks) || stocks.stocks.length < 6000) throw new Error("Stock registry is incomplete");
+          for (const asset of futures.assets) {
+            for (const [date, low, high] of asset.series) {
+              if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(low) || !Number.isFinite(high) || low > high) {
+                throw new Error(`${asset.id}: invalid daily point`);
+              }
+            }
+          }
+          for (const [id, , date, low, high, historicalLow, historicalHigh] of stocks.stocks) {
+            if (!date || ![low, high, historicalLow, historicalHigh].every(Number.isFinite) || low > high || historicalLow > historicalHigh) {
+              throw new Error(`${id}: invalid stock summary`);
+            }
+          }
+          console.log(`Validated futures through ${futures.asOf} and stocks through ${stocks.asOf}`);
+          NODE
+
+      - name: Commit refreshed data
+        run: |
+          git config user.name "tread-data-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add public/data/daily-futures.json public/data/daily-stocks.json
+          git diff --cached --quiet && exit 0
+          git commit -m "data: update daily market prices"
+          git push
