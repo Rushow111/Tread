@@ -31,6 +31,9 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Install WebSocket client
+        run: npm install --no-save --ignore-scripts --no-audit --no-fund ws@8.18.0
+
       - name: Validate updater
         run: node scripts/update-daily-market-data.mjs --self-test
 

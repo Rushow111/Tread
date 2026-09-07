@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { gunzipSync } from "node:zlib";
+import WebSocketClient from "ws";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const FUTURES_REGISTRY_PATH = resolve(ROOT, "data/futures-registry.json");
@@ -223,15 +224,24 @@ async function updateFutures(registry, previous) {
       sourceKey: "CZCE",
       parser: parseCzce,
       url: (date) => `https://www.czce.com.cn/cn/DFSStaticFiles/Future/${date.slice(0, 4)}/${compactDate(date)}/FutureDataDaily.txt`,
+      fallbackUrl: (date) => `http://www.czce.com.cn/cn/DFSStaticFiles/Future/${date.slice(0, 4)}/${compactDate(date)}/FutureDataDaily.txt`,
     },
   ];
 
-  await Promise.all(officialJobs.map(async ({ sourceKey, parser, url }) => {
+  await Promise.all(officialJobs.map(async ({ sourceKey, parser, url, fallbackUrl }) => {
     const assets = registry.assets.filter((asset) => asset.sourceKey === sourceKey);
     const allowed = new Map(assets.map((asset) => [asset.symbol, asset.id]));
     const dates = weekdays(queryStart(sourceKey), END_DATE);
     const responses = await mapConcurrent(dates, 12, async (date) => {
-      const body = await requestText(url(date));
+      const headers = sourceKey === "CZCE"
+        ? {
+            accept: "text/plain,text/html;q=0.9,*/*;q=0.8",
+            "accept-language": "zh-CN,zh;q=0.9,en;q=0.7",
+            referer: "https://www.czce.com.cn/",
+          }
+        : {};
+      let body = await requestText(url(date), { headers });
+      if (!body && fallbackUrl) body = await requestText(fallbackUrl(date), { headers });
       if (!body || body.trimStart().startsWith("<")) return null;
       return { date, rows: groupDailyRows(parser(body), allowed) };
     });
@@ -324,8 +334,9 @@ async function updateFutures(registry, previous) {
     return new Promise((resolvePromise) => {
       let points = [];
       let settled = false;
-      const socket = new WebSocket(
+      const socket = new WebSocketClient(
         `wss://data.tradingview.com/socket.io/websocket?from=symbols/${encodeURIComponent(providerSymbol)}/`,
+        { headers: { Origin: "https://www.tradingview.com" } },
       );
       const finish = (value) => {
         if (settled) return;
@@ -373,7 +384,10 @@ async function updateFutures(registry, previous) {
   const tradingViewResults = await mapConcurrent(tradingViewAssets, 6, loadTradingView);
   const tradingViewSuccesses = tradingViewResults.filter((result) => result === true).length;
   if (tradingViewSuccesses > 0) successfulSources.add("TRADINGVIEW");
-  else if (tradingViewAssets.length) failures.push("TRADINGVIEW: all requests failed");
+  else if (tradingViewAssets.length) {
+    const examples = tradingViewResults.filter((result) => result?.error).slice(0, 3).map((result) => result.error);
+    failures.push(`TRADINGVIEW: all requests failed (${examples.join("; ")})`);
+  }
 
   if (successfulSources.size === 0) throw new Error(`Every futures source failed: ${failures.join("; ")}`);
 
