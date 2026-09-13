@@ -27,6 +27,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - run: npm install --no-save --ignore-scripts --no-audit --no-fund ws@8.18.0
       - run: node scripts/update-low-metrics.mjs
       - name: Publish calculated daily-low metrics
         run: |
