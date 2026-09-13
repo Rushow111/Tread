@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { gunzipSync } from 'node:zlib';
+import WebSocket from 'ws';
 import { trimmedRange } from './trimmed-range.mjs';
 
 const root = resolve(import.meta.dirname, '..');
@@ -63,6 +64,66 @@ async function yahooDailyLows(asset) {
   ]);
 }
 
+async function sinaDailyLows(asset) {
+  const symbol = `${asset.symbol}0`;
+  const body = await get(`https://stock2.finance.sina.com.cn/futures/api/jsonp.php/var_${symbol}=/InnerFuturesNewService.getDailyKLine?symbol=${symbol}`);
+  const data = JSON.parse(body.slice(body.indexOf('['), body.lastIndexOf(']') + 1));
+  if (!data.length) throw new Error('No daily-low history');
+  return data.map(row => [row.d, row.l == null || row.l === '' ? null : Number(row.l)]);
+}
+
+function frame(payload) {
+  const value = JSON.stringify(payload);
+  return `~m~${value.length}~m~${value}`;
+}
+
+function tradingViewDailyLows(asset) {
+  return new Promise((resolveResult, reject) => {
+    const symbol = asset.id.replace(/^TV:/, '');
+    const session = `cs_${Math.random().toString(36).slice(2)}`;
+    const socket = new WebSocket('wss://data.tradingview.com/socket.io/websocket', {
+      headers: { Origin: 'https://www.tradingview.com' },
+    });
+    const points = new Map();
+    let settled = false;
+    const finish = error => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { socket.close(); } catch {}
+      error ? reject(error) : resolveResult([...points.values()]);
+    };
+    const timer = setTimeout(() => finish(new Error('TradingView timeout')), 45_000);
+    const send = (method, params) => socket.send(frame({ m: method, p: params }));
+    socket.on('open', () => {
+      send('set_auth_token', ['unauthorized_user_token']);
+      send('chart_create_session', [session, '']);
+      send('switch_timezone', [session, 'Etc/UTC']);
+      send('resolve_symbol', [session, 's', `={"symbol":"${symbol}","adjustment":"none","session":"regular"}`]);
+      send('create_series', [session, 's1', 's1', 's', '1D', 20_000, '']);
+    });
+    socket.on('message', raw => {
+      const text = raw.toString();
+      if (text.includes('~h~')) { socket.send(text); return; }
+      for (const part of text.split(/~m~\d+~m~/).filter(Boolean)) {
+        let message;
+        try { message = JSON.parse(part); } catch { continue; }
+        if (message.m === 'timescale_update') {
+          for (const point of message.p?.[1]?.s1?.s ?? []) {
+            const [timestamp, , , low] = point.v ?? [];
+            if (Number.isFinite(timestamp)) {
+              points.set(timestamp, [new Date(timestamp * 1_000).toISOString().slice(0, 10), low]);
+            }
+          }
+        }
+        if (['critical_error', 'symbol_error', 'series_error'].includes(message.m)) finish(new Error(message.m));
+        if (message.m === 'series_completed') finish(points.size ? null : new Error('Empty daily-low series'));
+      }
+    });
+    socket.on('error', finish);
+  });
+}
+
 function normalizeDate(value) {
   const date = String(value ?? '');
   return /^\d{8}$/.test(date)
@@ -110,17 +171,21 @@ await Promise.all(Array.from({ length: 6 }, async () => {
     const asset = assets[cursor++];
     const checkedAt = new Date().toISOString();
     try {
-      const points = asset.stock
-        ? await yahooDailyLows(asset)
-        : displayedFuturesDailyLows(asset);
+      let points;
+      if (asset.stock) points = await yahooDailyLows(asset);
+      else if (bundledFutures.has(asset.id)) points = displayedFuturesDailyLows(asset);
+      else if (asset.sourceKey === 'YAHOO') points = await yahooDailyLows(asset);
+      else if (asset.sourceKey === 'SINA_CN_FUTURES') points = await sinaDailyLows(asset);
+      else if (asset.sourceKey === 'TRADINGVIEW') points = await tradingViewDailyLows(asset);
+      else throw new Error('No daily-low source');
       rows[asset.id] = {
         ...trimmedRange(points, end),
         source: asset.sourceKey,
         checkedAt,
         priceBasis: 'daily_low',
-        historyCoverage: asset.stock
-          ? 'all_available_from_provider'
-          : 'same_history_as_displayed_price_series',
+        historyCoverage: bundledFutures.has(asset.id)
+          ? 'same_history_as_displayed_price_series'
+          : 'all_available_from_same_provider_as_displayed_series',
         error: null,
       };
     } catch (error) {
