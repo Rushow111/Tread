@@ -6,7 +6,7 @@ import { trimmedRange } from './trimmed-range.mjs';
 const root = resolve(import.meta.dirname, '..');
 const end = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
 const registry = JSON.parse(await readFile(resolve(root, 'data/futures-registry.json'), 'utf8'));
-const seed = JSON.parse(gunzipSync(await readFile(resolve(root, 'data/us-stock-seed.json.gz')));
+const seed = JSON.parse(gunzipSync(await readFile(resolve(root, 'data/us-stock-seed.json.gz'))));
 const futures = JSON.parse(await readFile(resolve(root, 'public/data/futures.json'), 'utf8'));
 let dailyFutures = { assets: [] };
 try { dailyFutures = JSON.parse(await readFile(resolve(root, 'public/data/daily-futures.json'), 'utf8')); } catch {}
