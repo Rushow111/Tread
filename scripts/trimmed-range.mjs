@@ -5,7 +5,7 @@ export function trimmedRange(points, asOf) {
     if (/^\d{4}-\d{2}-\d{2}$/.test(date) && date <= asOf && typeof close === 'number' && Number.isFinite(close)) byDate.set(date, close);
   }
   const dates = [...byDate.keys()].sort();
-  const cutoff = new Date(`${asOf}T00:00:00Z`);
+  const cutoff = new Date(`${dates.at(-1) ?? asOf}T00:00:00Z`);
   cutoff.setUTCFullYear(cutoff.getUTCFullYear() - 10);
   const base = { sampleCount: dates.length, start: dates[0] ?? null, priceDate: dates.at(-1) ?? null, price: byDate.get(dates.at(-1)) ?? null, positionPct: null, widthPct: null };
   if (!dates.length || dates[0] > cutoff.toISOString().slice(0, 10)) return { ...base, reason: 'history_under_10_years' };
