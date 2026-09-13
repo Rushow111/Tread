@@ -3,9 +3,7 @@ name: Update daily market data
 on:
   workflow_dispatch:
   schedule:
-    # Primary refresh: 10:17 Beijing time. The second slot is a fallback for
-    # delayed or dropped GitHub scheduled events and skips when the first run
-    # already produced a healthy refresh.
+    # Run both slots: an HTTP success or a recent file timestamp is not proof of fresh prices.
     - cron: "17 2 * * *"
     - cron: "47 8 * * *"
   push:
@@ -20,7 +18,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: daily-market-data
+  group: market-data-writer
   cancel-in-progress: false
 
 jobs:
@@ -30,55 +28,24 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
 
-      - name: Check whether a healthy refresh already ran
-        id: freshness
-        run: |
-          node - <<'NODE'
-          const fs = require("node:fs");
-
-          function read(path) {
-            try { return JSON.parse(fs.readFileSync(path, "utf8")); }
-            catch { return null; }
-          }
-
-          const futures = read("public/data/daily-futures.json");
-          const stocks = read("public/data/daily-stocks.json");
-          const timestamps = [futures?.generatedAt, stocks?.generatedAt]
-            .map((value) => Date.parse(value))
-            .filter(Number.isFinite);
-          const youngestAge = timestamps.length === 2
-            ? Date.now() - Math.min(...timestamps)
-            : Number.POSITIVE_INFINITY;
-          const healthy =
-            Array.isArray(futures?.status?.failures) && futures.status.failures.length === 0 &&
-            stocks?.status?.failedBatches === 0;
-          const skip = healthy && youngestAge < 12 * 60 * 60 * 1000;
-
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `skip=${skip}\n`);
-          console.log(skip
-            ? "A healthy refresh completed within the last 12 hours; skipping this fallback run."
-            : "Dataset is stale or incomplete; running the refresh.");
-          NODE
-
       - name: Install WebSocket client
-        if: steps.freshness.outputs.skip != 'true'
         run: npm install --no-save --ignore-scripts --no-audit --no-fund ws@8.18.0
 
       - name: Validate updater
-        if: steps.freshness.outputs.skip != 'true'
         run: node scripts/update-daily-market-data.mjs --self-test
 
       - name: Download latest completed daily prices
-        if: steps.freshness.outputs.skip != 'true'
         run: node scripts/update-daily-market-data.mjs
 
       - name: Validate daily datasets
-        if: steps.freshness.outputs.skip != 'true'
         run: |
           node - <<'NODE'
           const fs = require("node:fs");
@@ -103,11 +70,22 @@ jobs:
           NODE
 
       - name: Commit refreshed data
-        if: steps.freshness.outputs.skip != 'true'
         run: |
+          mkdir -p "$RUNNER_TEMP/price-atlas-data"
+          cp public/data/daily-futures.json "$RUNNER_TEMP/price-atlas-data/daily-futures.json"
+          cp public/data/daily-stocks.json "$RUNNER_TEMP/price-atlas-data/daily-stocks.json"
+          git restore public/data/daily-futures.json public/data/daily-stocks.json
+          git pull --ff-only origin main
+          cp "$RUNNER_TEMP/price-atlas-data/daily-futures.json" public/data/daily-futures.json
+          cp "$RUNNER_TEMP/price-atlas-data/daily-stocks.json" public/data/daily-stocks.json
           git config user.name "tread-data-bot"
           git config user.email "actions@users.noreply.github.com"
           git add public/data/daily-futures.json public/data/daily-stocks.json
           git diff --cached --quiet && exit 0
           git commit -m "data: update daily market prices"
-          git push
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then exit 0; fi
+            git pull --rebase origin main
+          done
+          echo 'Failed to publish market data after three attempts' >&2
+          exit 1
