@@ -1,4 +1,4 @@
-name: Update all-history close metrics
+name: Update all-history daily-low metrics
 on:
   workflow_dispatch:
   schedule:
@@ -8,7 +8,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/update-close-metrics.yml'
-      - 'scripts/update-close-metrics.mjs'
+      - 'scripts/update-low-metrics.mjs'
       - 'scripts/trimmed-range.mjs'
 permissions:
   contents: write
@@ -27,19 +27,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: npm install --no-save --ignore-scripts --no-audit --no-fund ws@8.18.0
-      - run: node scripts/update-close-metrics.mjs
-      - name: Publish calculated daily-close metrics
+      - run: node scripts/update-low-metrics.mjs
+      - name: Publish calculated daily-low metrics
         run: |
-          cp public/data/close-metrics.json "$RUNNER_TEMP/close-metrics.json"
-          git restore public/data/close-metrics.json
+          cp public/data/low-metrics.json "$RUNNER_TEMP/low-metrics.json"
+          git restore public/data/low-metrics.json 2>/dev/null || true
           git pull --ff-only origin main
-          cp "$RUNNER_TEMP/close-metrics.json" public/data/close-metrics.json
+          cp "$RUNNER_TEMP/low-metrics.json" public/data/low-metrics.json
           git config user.name 'tread-data-bot'
           git config user.email 'actions@users.noreply.github.com'
-          git add public/data/close-metrics.json
+          git add public/data/low-metrics.json
           git diff --cached --quiet && exit 0
-          git commit -m 'data: recompute all-history trimmed close metrics'
+          git commit -m 'data: recompute all-history trimmed daily-low metrics'
           for attempt in 1 2 3; do
             if git push origin HEAD:main; then exit 0; fi
             git pull --rebase origin main
