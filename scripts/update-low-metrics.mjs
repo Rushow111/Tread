@@ -20,6 +20,7 @@ const output = resolve(root, 'public/data/low-metrics.json');
 let previous = {};
 try { previous = JSON.parse(await readFile(output, 'utf8')).assets ?? {}; } catch {}
 const rows = {};
+const failedAssets = [];
 let cursor = 0;
 let done = 0;
 let errors = 0;
@@ -135,10 +136,11 @@ const bundledFutures = new Map(futures.assets.map(asset => [asset.id, asset]));
 const incrementalFutures = new Map(dailyFutures.assets.map(asset => [asset.id, asset.series]));
 
 function displayedFuturesDailyLows(asset) {
-  const base = bundledFutures.get(asset.id);
-  if (!base?.series?.length) throw new Error('No displayed daily-low history');
+  const baseSeries = bundledFutures.get(asset.id)?.series ?? [];
+  const incrementalSeries = incrementalFutures.get(asset.id) ?? [];
+  if (!baseSeries.length && !incrementalSeries.length) throw new Error('No displayed daily-low history');
   const byDate = new Map();
-  for (const [rawDate, low] of [...base.series, ...(incrementalFutures.get(asset.id) ?? [])]) {
+  for (const [rawDate, low] of [...baseSeries, ...incrementalSeries]) {
     const date = normalizeDate(rawDate);
     const price = Number(low);
     if (/^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(price)) byDate.set(date, price);
@@ -160,6 +162,7 @@ async function save() {
       processed: done,
       errors,
       eligible: Object.values(rows).filter(row => row.positionPct != null).length,
+      failedAssets,
     },
   };
   await writeFile(`${output}.tmp`, `${JSON.stringify(payload)}\n`);
@@ -173,7 +176,7 @@ await Promise.all(Array.from({ length: 6 }, async () => {
     try {
       let points;
       if (asset.stock) points = await yahooDailyLows(asset);
-      else if (bundledFutures.has(asset.id)) points = displayedFuturesDailyLows(asset);
+      else if (bundledFutures.has(asset.id) || incrementalFutures.has(asset.id)) points = displayedFuturesDailyLows(asset);
       else if (asset.sourceKey === 'YAHOO') points = await yahooDailyLows(asset);
       else if (asset.sourceKey === 'SINA_CN_FUTURES') points = await sinaDailyLows(asset);
       else if (asset.sourceKey === 'TRADINGVIEW') points = await tradingViewDailyLows(asset);
@@ -185,11 +188,14 @@ await Promise.all(Array.from({ length: 6 }, async () => {
         priceBasis: 'daily_low',
         historyCoverage: bundledFutures.has(asset.id)
           ? 'same_history_as_displayed_price_series'
-          : 'all_available_from_same_provider_as_displayed_series',
+          : incrementalFutures.has(asset.id)
+            ? 'incremental_displayed_price_series_only'
+            : 'all_available_from_same_provider_as_displayed_series',
         error: null,
       };
     } catch (error) {
       errors += 1;
+      failedAssets.push({ id: asset.id, source: asset.sourceKey, error: String(error) });
       rows[asset.id] = {
         ...previous[asset.id],
         positionPct: null,
