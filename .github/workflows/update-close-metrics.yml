@@ -29,6 +29,28 @@ jobs:
           node-version: '22'
       - run: npm install --no-save --ignore-scripts --no-audit --no-fund ws@8.18.0
       - run: node scripts/update-low-metrics.mjs
+      - name: Validate calculated daily-low metrics
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const data = JSON.parse(fs.readFileSync('public/data/low-metrics.json', 'utf8'));
+          const status = data.status ?? {};
+          const rows = data.assets ?? {};
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(data.asOf ?? '')) throw new Error('Invalid metrics asOf date');
+          if (!Number.isFinite(status.total) || status.total < 6500) throw new Error(`Unexpected metric registry size: ${status.total}`);
+          if (status.processed !== status.total) throw new Error(`Metrics processing incomplete: ${status.processed}/${status.total}`);
+          if (Object.keys(rows).length !== status.total) throw new Error(`Metrics row count mismatch: ${Object.keys(rows).length}/${status.total}`);
+          if (!Number.isFinite(status.eligible) || status.eligible < 3000) throw new Error(`Too few eligible metrics: ${status.eligible}`);
+          const maxErrors = Math.max(10, Math.ceil(status.total * 0.005));
+          if (!Number.isFinite(status.errors) || status.errors > maxErrors) {
+            const examples = (status.failedAssets ?? []).slice(0, 12).map(item => `${item.id}: ${item.error}`).join('; ');
+            throw new Error(`Too many daily-low collection errors: ${status.errors}/${status.total} (limit ${maxErrors}). ${examples}`);
+          }
+          if ((status.failedAssets ?? []).length !== status.errors) {
+            throw new Error(`Failure diagnostics mismatch: ${status.failedAssets?.length ?? 0}/${status.errors}`);
+          }
+          console.log(`Validated ${status.processed}/${status.total}; eligible ${status.eligible}; source errors ${status.errors}`);
+          NODE
       - name: Publish calculated daily-low metrics
         run: |
           cp public/data/low-metrics.json "$RUNNER_TEMP/low-metrics.json"

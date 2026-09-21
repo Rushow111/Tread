@@ -51,22 +51,69 @@ jobs:
           const fs = require("node:fs");
           const futures = JSON.parse(fs.readFileSync("public/data/daily-futures.json", "utf8"));
           const stocks = JSON.parse(fs.readFileSync("public/data/daily-stocks.json", "utf8"));
+
+          const ratio = (value, total) => total > 0 ? value / total : 0;
+          const subtractDays = (date, days) => {
+            const value = new Date(`${date}T00:00:00Z`);
+            value.setUTCDate(value.getUTCDate() - days);
+            return value.toISOString().slice(0, 10);
+          };
+
           if (futures.status.registryCount !== 217) throw new Error("Futures registry is incomplete");
-          if (!Array.isArray(futures.assets) || futures.assets.length < 80) throw new Error("Too few futures received a daily update");
-          if (!Array.isArray(stocks.stocks) || stocks.stocks.length < 6000) throw new Error("Stock registry is incomplete");
+          if (!Array.isArray(futures.assets)) throw new Error("Futures dataset is malformed");
+          if (futures.assets.length !== futures.status.updatedAssetCount) {
+            throw new Error("Futures status count does not match the dataset");
+          }
+          const futuresCoverage = ratio(futures.status.updatedAssetCount, futures.status.registryCount);
+          if (futuresCoverage < 0.95) {
+            throw new Error(`Futures coverage too low: ${(futuresCoverage * 100).toFixed(2)}%`);
+          }
+          if ((futures.status.failures ?? []).length > 0) {
+            throw new Error(`A futures source failed completely: ${futures.status.failures.join("; ")}`);
+          }
+
+          if (!Array.isArray(stocks.stocks)) throw new Error("Stock dataset is malformed");
+          if (stocks.stocks.length !== stocks.status.registryCount) {
+            throw new Error(`Stock registry/output mismatch: ${stocks.stocks.length}/${stocks.status.registryCount}`);
+          }
+          const stockUpdateCoverage = ratio(stocks.status.updatedQuotes, stocks.status.registryCount);
+          if (stockUpdateCoverage < 0.99) {
+            throw new Error(`Too few stocks refreshed this run: ${stocks.status.updatedQuotes}/${stocks.status.registryCount}`);
+          }
+          if (stocks.status.failedBatches > 1) {
+            throw new Error(`Too many Yahoo stock batches failed: ${stocks.status.failedBatches}/${stocks.status.totalBatches}`);
+          }
+
           for (const asset of futures.assets) {
+            if (!Array.isArray(asset.series) || asset.series.length === 0) {
+              throw new Error(`${asset.id}: empty futures series`);
+            }
             for (const [date, low, high] of asset.series) {
               if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(low) || !Number.isFinite(high) || low > high) {
                 throw new Error(`${asset.id}: invalid daily point`);
               }
             }
           }
+
+          const recentCutoff = subtractDays(futures.asOf, 7);
+          const recentFutures = futures.assets.filter((asset) => asset.series.at(-1)?.[0] >= recentCutoff).length;
+          const recentFuturesCoverage = ratio(recentFutures, futures.status.registryCount);
+          if (recentFuturesCoverage < 0.90) {
+            throw new Error(`Too many stale futures series: ${recentFutures}/${futures.status.registryCount} recent within 7 days`);
+          }
+
           for (const [id, , date, low, high, historicalLow, historicalHigh] of stocks.stocks) {
             if (!date || ![low, high, historicalLow, historicalHigh].every(Number.isFinite) || low > high || historicalLow > historicalHigh) {
               throw new Error(`${id}: invalid stock summary`);
             }
           }
-          console.log(`Validated futures through ${futures.asOf} and stocks through ${stocks.asOf}`);
+
+          console.log(
+            `Validated futures ${futures.status.updatedAssetCount}/${futures.status.registryCount} ` +
+            `(${(futuresCoverage * 100).toFixed(2)}%, ${recentFutures} recent) through ${futures.asOf}; ` +
+            `stocks ${stocks.status.updatedQuotes}/${stocks.status.registryCount} ` +
+            `(${(stockUpdateCoverage * 100).toFixed(2)}%) through ${stocks.asOf}`,
+          );
           NODE
 
       - name: Commit refreshed data
